@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="light">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AIRPULSE APIx</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root{--bg:#f1f3f6;--card:#ffffff;--ink:#1f2d3d;--mute:#6b7a8c;--line:#e3e8ee;--accent:#38b6ff;--warn:#9a4a05}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,Segoe UI,sans-serif}
+header{padding:20px 16px 8px;max-width:1200px;margin:auto}h1{margin:0;font-size:22px;color:var(--accent)}h1 small{font-weight:400;color:var(--mute);font-size:14px}
+main{max-width:1200px;margin:auto;padding:8px 16px 40px;display:grid;gap:16px;grid-template-columns:repeat(12,1fr);align-items:stretch}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;grid-column:span 12;min-width:0}
+.c6{grid-column:span 6}.c4{grid-column:span 4}.c3{grid-column:span 3}
+@media(max-width:800px){.c6,.c4,.c3{grid-column:span 12}}
+h2{font-size:14px;margin:0 0 10px;color:var(--mute);font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+.kpi{font-size:28px;font-weight:700}.kpi small{display:block;font-size:12px;font-weight:400;color:var(--mute)}
+.tabs button,select{background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:4px 10px;margin-right:4px;cursor:pointer}
+.tabs button.on{background:var(--accent);color:#04263d;border-color:var(--accent)}
+table{border-collapse:collapse;width:100%;font-size:13px}th,td{padding:5px 8px;text-align:right;border-bottom:1px solid var(--line)}th:first-child,td:first-child{text-align:left}
+.wrap{overflow-x:auto}
+table.hm{border-collapse:separate;border-spacing:4px;width:100%;max-width:760px;margin:auto}
+table.hm th{border:0;text-align:center;color:var(--mute);font-weight:600;padding:4px}
+table.hm td{border:0;border-radius:6px;text-align:center;padding:9px 6px;font-variant-numeric:tabular-nums;font-weight:600}
+table.hm td:first-child{background:none;text-align:left;font-weight:600;color:var(--ink);width:90px}
+canvas{max-height:none}
+.ch{position:relative;height:300px;margin-top:8px}
+.qcard{display:flex;flex-direction:column}.qchart{flex:1;min-height:200px;position:relative;margin-top:12px}.qchart canvas{max-height:none}
+.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px}
+.tiles div{background:var(--bg);border-radius:8px;padding:8px;text-align:center}.tiles b{display:block;font-size:20px}.tiles span{font-size:12px;color:var(--mute)}
+</style>
+</head>
+<body>
+<header><h1>AIRPULSE <small>Real-time Airfare Price Index (APIx) · base = first collection day = 100</small></h1></header>
+<main>
+  <div class="card c3"><h2>Latest APIx</h2><div class="kpi" id="k1">–<small id="k1s"></small></div></div>
+  <div class="card c3"><h2>Change vs 7 days ago</h2><div class="kpi" id="k2">–<small>7-day mean basis</small></div></div>
+  <div class="card c3"><h2>Clean quotes (latest day)</h2><div class="kpi" id="k3">–<small id="k3s"></small></div></div>
+  <div class="card c3"><h2>Cells observed</h2><div class="kpi" id="k4">–<small>route × lead window</small></div></div>
+
+  <div class="card"><h2>Airfare Price Index</h2>
+    <div class="tabs" id="tabs"><button data-f="D7" class="on">Daily (7d mean)</button><button data-f="D">Daily raw</button><button data-f="W">Weekly</button><button data-f="M">Monthly</button></div>
+    <div class="ch"><canvas id="idx"></canvas></div></div>
+
+  <div class="card c6"><h2>Route fare trend (₹)</h2><select id="route"></select><div class="ch"><canvas id="trend"></canvas></div></div>
+  <div class="card c6"><h2>Lead-time curve (fare relative to T+45)</h2><div class="ch"><canvas id="elas"></canvas></div></div>
+
+  <div class="card"><h2>Sector heatmap — mean total fare (₹) by route × advance-purchase window</h2><div class="wrap" id="heat"></div></div>
+  <div class="card c6"><h2>Back-test vs DGCA average fares</h2><div id="bt"></div></div>
+  <div class="card c6 qcard"><h2>Data quality (all days)</h2><div id="qc"></div><div class="qchart"><canvas id="qcc"></canvas></div></div>
+</main>
+<script>
+const $=id=>document.getElementById(id), j=u=>fetch(u).then(r=>r.json());
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+Chart.defaults.color=css('--mute');Chart.defaults.borderColor=css('--line');
+let idxChart,trendChart,elasChart,data={};
+function line(ctx,labels,sets){return new Chart(ctx,{type:'line',data:{labels,datasets:sets},options:{maintainAspectRatio:false,animation:false,pointRadius:0,tension:.25,plugins:{legend:{display:sets.length>1}},scales:{x:{ticks:{maxTicksLimit:8}}}}})}
+function drawIdx(f){
+  const s=f==='D7'?data.D:data[f]; const key=f==='D7'?'apix_7d':'apix';
+  const pts=s.filter(r=>r[key]!=null);
+  if(idxChart)idxChart.destroy();
+  idxChart=line($('idx'),pts.map(r=>r.date),[{label:'APIx',data:pts.map(r=>r[key]),borderColor:css('--accent'),borderWidth:2}]);
+}
+async function drawTrend(){const t=await j('/api/route-trend?route='+$('route').value);
+  if(trendChart)trendChart.destroy();
+  trendChart=line($('trend'),t.map(r=>r.date),[{label:'Mean',data:t.map(r=>r.avg_fare),borderColor:css('--accent'),borderWidth:2},{label:'Cheapest',data:t.map(r=>r.min_fare),borderColor:css('--mute'),borderDash:[4,3],borderWidth:1.5}])}
+(async()=>{
+  const [D,W,M,routes,heat,el,bt,qc]=await Promise.all(['/api/index?freq=D','/api/index?freq=W','/api/index?freq=M','/api/routes','/api/heatmap','/api/elasticity','/api/backtest','/api/quality'].map(j));
+  data={D:D.series,W:W.series,M:M.series};
+  const last=D.series.at(-1), s7=D.series.filter(r=>r.apix_7d!=null);
+  $('k1').firstChild.textContent=last.apix.toFixed(1); $('k1s').textContent=last.date;
+  if(s7.length>7){const a=s7.at(-1).apix_7d,b=s7.at(-8).apix_7d;$('k2').firstChild.textContent=((a/b-1)*100).toFixed(1)+'%'}
+  const ql=qc.at(-1); $('k3').firstChild.textContent=ql.kept; $('k3s').textContent=ql.raw+' raw collected';
+  $('k4').firstChild.textContent=routes.length*5;
+  drawIdx('D7');
+  $('tabs').onclick=e=>{if(!e.target.dataset.f)return;[...$('tabs').children].forEach(b=>b.classList.toggle('on',b===e.target));drawIdx(e.target.dataset.f)};
+  $('route').innerHTML=routes.map(r=>`<option>${r.route}</option>`).join(''); $('route').onchange=drawTrend; drawTrend();
+  if(elasChart)elasChart.destroy();
+  elasChart=new Chart($('elas'),{type:'bar',data:{labels:el.map(e=>'T+'+e.lead_days),datasets:[{label:'relative fare',data:el.map(e=>e.relative_fare),backgroundColor:css('--accent')}]},options:{maintainAspectRatio:false,animation:false,plugins:{legend:{display:false}}}});
+  const all=heat.values.flat().filter(v=>v!=null),mn=Math.min(...all),mx=Math.max(...all);
+  $('heat').innerHTML='<table class="hm"><tr><th></th>'+heat.leads.map(l=>`<th>T+${l}</th>`).join('')+'</tr>'+heat.routes.map((r,i)=>`<tr><td>${r}</td>`+heat.values[i].map(v=>{const t=v==null?0:(v-mn)/(mx-mn);const l=Math.round(92-t*40);return `<td style="background:hsl(203 85% ${l}%);color:${l<68?'#fff':'#1f2d3d'}">${v==null?'–':Math.round(v/100)/10+'k'}</td>`}).join('')+'</tr>').join('')+'</table>';
+  const n=x=>Number(x).toLocaleString('en-IN');
+  $('bt').innerHTML=bt.error?bt.error:`<p style="margin:0 0 10px;color:var(--mute)">${bt.days} days · ${bt.routes_compared} routes · ${bt.reference}</p>
+<div class="tiles">${[['Level ratio',bt.level_ratio],['MAPE',bt.mape_pct+'%'],['Rank corr',bt.spearman_rank_corr]].map(([k,v])=>`<div><b>${v}</b><span>${k}</span></div>`).join('')}</div>
+<table><tr><th>Route</th><th>APIx avg ₹</th><th>DGCA avg ₹</th><th>Error</th></tr>${bt.table.map(r=>`<tr><td>${r.route}</td><td>${n(r.apix_avg)}</td><td>${n(r.dgca_avg)}</td><td>${(Math.abs(r.apix_avg-r.dgca_avg)/r.dgca_avg*100).toFixed(1)}%</td></tr>`).join('')}</table>`;
+  const sum=k=>qc.reduce((a,r)=>a+r[k],0);
+  $('qc').innerHTML='<table>'+[['Raw quotes','raw'],['Duplicates removed','duplicates'],['Sold-out / cancelled','sold_out'],['Missing fare','missing'],['Component mismatch','inconsistent'],['Outliers (MAD)','outliers'],['Kept','kept']].map(([k,f])=>`<tr><td>${k}</td><td>${n(sum(f))}</td></tr>`).join('')+'</table>';
+  const rem=[['Duplicates','duplicates'],['Sold-out','sold_out'],['Missing','missing'],['Mismatch','inconsistent'],['Outliers','outliers']];
+  new Chart($('qcc'),{type:'bar',data:{labels:rem.map(r=>r[0]),datasets:[{data:rem.map(r=>sum(r[1])),backgroundColor:css('--accent'),borderRadius:4}]},options:{indexAxis:'y',maintainAspectRatio:false,animation:false,plugins:{legend:{display:false},title:{display:true,text:'Quotes removed by reason'}}}});
+})();
+</script>
+</body>
+</html>
